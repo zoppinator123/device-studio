@@ -1,4 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0891b2"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="26" font-weight="600" fill="#ffffff">LE</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Device Studio">
+  <!-- Mirrors scripts/make-icon.swift, which renders the app's .icns. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#212e33"/>
+      <stop offset="1" stop-color="#0d1217"/>
+    </linearGradient>
+    <filter id="tile-shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="11" flood-opacity="0.3"/>
+    </filter>
+    <filter id="knob-shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="6" stdDeviation="7" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)" filter="url(#tile-shadow)"/>
+  <g fill="#6bd9bd">
+    <g opacity="0.22">
+      <rect x="316" y="292" width="40" height="440" rx="20"/>
+      <rect x="492" y="292" width="40" height="440" rx="20"/>
+      <rect x="668" y="292" width="40" height="440" rx="20"/>
+    </g>
+    <rect x="316" y="414" width="40" height="318" rx="20"/>
+    <rect x="492" y="604" width="40" height="128" rx="20"/>
+    <rect x="668" y="479" width="40" height="253" rx="20"/>
+  </g>
+  <g fill="#f5faf7" filter="url(#knob-shadow)">
+    <circle cx="336" cy="414" r="62"/>
+    <circle cx="512" cy="604" r="62"/>
+    <circle cx="688" cy="479" r="62"/>
+  </g>
 </svg>
