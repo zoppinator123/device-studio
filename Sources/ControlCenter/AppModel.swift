@@ -31,6 +31,8 @@ import AVFoundation
             selectedPage = page
         }
         refreshSetupStatus()
+        // Saved button mappings should work after every launch without a trip to the menu bar.
+        if !preview, settings.profiles.contains(where: { $0.rules.contains(where: \.captures) }) { mouse.enable() }
         mouse.onAction = { [weak self] action in
             guard let self, let preset = self.settings.cameraPresets.first(where: { $0.id == action.presetID }) else { return }
             self.camera.apply(preset)
