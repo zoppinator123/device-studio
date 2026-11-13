@@ -5,6 +5,7 @@ struct MeetingsPage: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var recorder: MeetingRecorder
     @ViewState private var pendingDelete: MeetingRecord?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Form {
@@ -17,6 +18,11 @@ struct MeetingsPage: View {
                         Spacer(minLength: 12)
                         Button("Stop Recording", role: .destructive, action: recorder.stop)
                             .keyboardShortcut(".", modifiers: .command)
+                    }
+                    LiveTranscriptView(recorder: recorder).frame(height: 300)
+                    HStack {
+                        Spacer()
+                        Button("Open in Separate Window") { openWindow(id: "live-transcript") }.controlSize(.small)
                     }
                     if let path = recorder.systemAudioPath { DetailText("System audio: \(path)") }
                     if let echo = recorder.echoState { DetailText(echo) }
@@ -40,7 +46,9 @@ struct MeetingsPage: View {
             }
 
             Section {
-                Toggle("Make notes when a recording stops", isOn: $model.settings.meetings.autoNotes)
+                Toggle("Make notes when a meeting ends", isOn: $model.settings.meetings.autoNotes)
+                Toggle("Keep audio as well as the transcript", isOn: $model.settings.meetings.keepAudio)
+                    .disabled(recorder.isRecording)
                 HStack(alignment: .firstTextBaseline) {
                     StatusLabel(text: engineProblem ?? "Ready: speech model checked before each use, network blocked while it runs.",
                                 level: engineProblem == nil ? .good : .attention)
@@ -51,7 +59,7 @@ struct MeetingsPage: View {
             } header: {
                 Text("Transcripts and Notes")
             } footer: {
-                SectionFooter("Transcription (Parakeet) and notes (a local language model) run on this Mac from a separate engine folder. They read audio and text through a pipe; the transcript and notes are saved encrypted with the meeting’s key.")
+                SectionFooter("Your words are transcribed live, on this Mac, as you speak; only the transcript is saved unless you choose to keep audio. Transcription (Parakeet) and notes (a local language model) run from a separate engine folder with network access blocked, and the transcript and notes are saved encrypted with the meeting’s key.")
             }
 
             Section {
@@ -141,7 +149,8 @@ struct MeetingsPage: View {
     }
 
     private func summary(_ r: MeetingRecord) -> String {
-        let sources = r.sources.count == 2 ? "Microphone and system audio" : r.sources == ["mic"] ? "Microphone only" : "System audio only"
+        var sources = r.sources.count == 2 ? "Microphone and system audio" : r.sources == ["mic"] ? "Microphone only" : "System audio only"
+        if r.audioKept == false { sources += " · transcript only" }
         var text = "\(MeetingRecorder.duration(r.durationSeconds)) · \(sources)"
         if r.damagedSegments > 0 { text += " · \(r.damagedSegments) damaged segment\(r.damagedSegments == 1 ? "" : "s")" }
         return text
@@ -153,7 +162,7 @@ struct MeetingsPage: View {
         case .recorded: return "Saved"
         case .interrupted: return "Interrupted, saved up to the stop"
         case .unreadable: return "Key missing"
-        case .transcribing: return "Transcribing…"
+        case .transcribing: return r.audioKept == false ? "Finishing transcript…" : "Transcribing…"
         case .makingNotes: return "Writing notes…"
         case .ready: return "Notes ready"
         case .failed: return r.problem ?? "Notes failed"
