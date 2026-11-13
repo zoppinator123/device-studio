@@ -41,11 +41,13 @@ import AVFoundation
             guard let preset = self.settings.cameraPresets.first(where: { $0.id == action.presetID }) else { return }
             self.camera.apply(preset)
         }
+        meetings.settings = settings.meetings
         meetings.recoverInterruptedRecordings()
         subscription = $settings.dropFirst().debounce(for: .milliseconds(300), scheduler: DispatchQueue.main).sink { [weak self] settings in
             guard let self else { return }
             self.mouse.profiles = settings.profiles
             self.mouse.configureGranola(settings.granolaThumb)
+            self.meetings.settings = settings.meetings
             guard self.canSave else { return }
             do { try self.store.save(settings) } catch { self.error = "Could not save settings: \(error.localizedDescription)" }
         }
@@ -99,6 +101,7 @@ import AVFoundation
             NSApp.activate(ignoringOtherApps: true)
             return
         }
+        meetings.settings = settings.meetings
         meetings.start(settings: settings.meetings)
     }
     func shutdown() {

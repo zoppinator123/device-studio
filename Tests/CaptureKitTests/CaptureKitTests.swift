@@ -279,3 +279,65 @@ final class EchoPolicyTests: XCTestCase {
         _ = OutputRoute.current()     // must not crash on a machine with or without an output device
     }
 }
+
+final class TranscriptAssemblerTests: XCTestCase {
+    func testMergeSortsByTimeAndDropsMicrophoneEcho() {
+        let lines = [
+            TimedText(channel: .microphone, startMs: 1_000, endMs: 4_000, text: "Can you hear me okay?"),
+            TimedText(channel: .system, startMs: 5_000, endMs: 9_000, text: "Yes, the vendor quoted forty dollars for the invoice."),
+            // the microphone picked up the speakers: same words, same time
+            TimedText(channel: .microphone, startMs: 5_200, endMs: 9_100, text: "the vendor quoted forty dollars for the invoice"),
+            TimedText(channel: .microphone, startMs: 9_500, endMs: 11_000, text: "Great, I'll pay it Friday."),
+        ]
+        let (merged, dropped) = TranscriptAssembler.merge(lines)
+        XCTAssertEqual(dropped, 1)
+        XCTAssertEqual(merged.map(\.startMs), [1_000, 5_000, 9_500])
+        XCTAssertEqual(TranscriptAssembler.render(merged),
+                       "[0:01] Me: Can you hear me okay?\n[0:05] Others: Yes, the vendor quoted forty dollars for the invoice.\n[0:09] Me: Great, I'll pay it Friday.\n")
+    }
+
+    func testSimilarWordsAtADifferentTimeAreNotEcho() {
+        let lines = [
+            TimedText(channel: .system, startMs: 0, endMs: 3_000, text: "upgrade the plan by Friday"),
+            TimedText(channel: .microphone, startMs: 60_000, endMs: 63_000, text: "upgrade the plan by Friday"),
+        ]
+        XCTAssertEqual(TranscriptAssembler.merge(lines).echoesDropped, 0)
+        XCTAssertEqual(TranscriptAssembler.render([TimedText(channel: .system, startMs: 3_725_000, endMs: 3_726_000, text: "x")]),
+                       "[1:02:05] Others: x\n")
+    }
+}
+
+final class SealedFileTests: XCTestCase {
+    func testSealedFilesRoundTripAndAreBoundToMeetingAndKind() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sealed-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = SymmetricKey(size: .bits256)
+        let a = try AudioSpool(root: root, meetingID: "m-a", key: key)
+        try a.writeSealed("transcript", Data("hello".utf8))
+        XCTAssertEqual(try a.readSealed("transcript"), Data("hello".utf8))
+        XCTAssertNil(try a.readSealed("notes"))
+        let onDisk = try Data(contentsOf: a.meetingDirectory.appendingPathComponent("transcript.sealed"))
+        XCTAssertNil(onDisk.range(of: Data("hello".utf8)))
+        // renamed to another kind, or copied to another meeting: refused
+        try FileManager.default.copyItem(at: a.meetingDirectory.appendingPathComponent("transcript.sealed"),
+                                         to: a.meetingDirectory.appendingPathComponent("notes.sealed"))
+        XCTAssertThrowsError(try a.readSealed("notes"))
+        let b = try AudioSpool(root: root, meetingID: "m-b", key: key)
+        try FileManager.default.copyItem(at: a.meetingDirectory.appendingPathComponent("transcript.sealed"),
+                                         to: b.meetingDirectory.appendingPathComponent("transcript.sealed"))
+        XCTAssertThrowsError(try b.readSealed("transcript"))
+        XCTAssertThrowsError(try a.writeSealed("../x", Data()))
+    }
+
+    func testReadableSegmentsSkipsDamage() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("segs-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let spool = try AudioSpool(root: root, meetingID: "m-1", key: SymmetricKey(size: .bits256))
+        for i in 0..<3 {
+            try spool.append(AudioSegment(channel: .microphone, sequence: i, startMs: Int64(i) * 5_000, sampleRate: 16_000, samples: [0.1, 0.2]))
+        }
+        try Data([0]).write(to: spool.directory.appendingPathComponent("mic-00000001.seg"))
+        XCTAssertEqual(spool.readableSegments(.microphone).map(\.sequence), [0, 2])
+        XCTAssertEqual(spool.readableSegments(.system), [])
+    }
+}
