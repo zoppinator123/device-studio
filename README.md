@@ -18,7 +18,7 @@
 - **Camera image controls.** Exposure, white balance, focus, zoom, and the rest of the camera's hardware settings, written straight to the camera over USB. Save looks as presets.
 - **Mouse shortcuts and scrolling.** Map the extra buttons to keyboard shortcuts, navigation, or camera presets. Add hold-and-drag gestures, change scroll speed and direction, and keep separate profiles per app.
 - **Hold to dictate.** Hold the MX Master thumb button to hold [Granola](https://www.granola.ai)'s voice-typing key; release to stop.
-- **Record meetings.** Record your microphone and, for calls, what your Mac plays, as two separate channels. Start and stop from the Meetings page, the menu bar, or a mouse button. Recordings are encrypted on your Mac and never uploaded. Turning them into transcripts and notes is not part of this version yet.
+- **Record meetings.** Record your microphone and, for calls, what your Mac plays, as two separate channels. Start and stop from the Meetings page, the menu bar, or a mouse button. Recordings are encrypted on your Mac and never uploaded. With a local notes engine installed, each recording becomes a transcript and notes on your Mac when it stops (see [Transcripts and notes](#transcripts-and-notes)).
 
 Each feature is optional. A setup guide walks through the ones you pick.
 
@@ -121,6 +121,17 @@ Turn on **Hold thumb button to dictate**, choose which thumb button, and choose 
 Device Studio only holds the key. Granola does the listening and typing, and Device Studio never sees the audio or the transcript. If Granola isn't running, it is opened in the background.
 
 This works independently of button mappings. Don't assign the same thumb button in Logi Options+ or another utility at the same time.
+
+## Transcripts and notes
+
+Device Studio does not bundle speech or language models. Point the Meetings page at a folder that holds:
+
+- `engine/target/release/engine-transcribe` and `engine-worker`: speech-to-text with [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (CC-BY-4.0) through transcribe.cpp. The model file is checked against its pinned size and SHA-256 before every use.
+- `.venv/bin/python` and `notes-runner/run_notes.py`: a local notes pipeline on an MLX language model.
+
+Both run as child processes with network access denied, read audio and text through a pipe, and write nothing to disk; Device Studio saves the transcript and notes encrypted with the meeting's key. Your microphone is labelled "Me" and system audio "Others"; when your microphone picks up the call through speakers, the repeated lines are dropped. Without an engine folder, recording still works and notes can be made later.
+
+`DeviceStudio --self-test-notes` checks the whole path with two lines of synthesized speech, without using the microphone.
 
 ## What it will and won't touch
 

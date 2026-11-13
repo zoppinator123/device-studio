@@ -162,6 +162,63 @@ public final class AudioSpool {
         return result
     }
 
+    // MARK: Other sealed files (transcript, notes)
+
+    /// The meeting's folder, which holds `audio/` and the sealed transcript and notes.
+    public var meetingDirectory: URL { directory.deletingLastPathComponent() }
+
+    /// Seal and durably write a small file belonging to this meeting, such as its transcript or notes. The
+    /// associated data binds it to this meeting and this `kind`, so it cannot be swapped for another file.
+    public func writeSealed(_ kind: String, _ data: Data) throws {
+        guard !kind.isEmpty, kind.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
+            throw SpoolError.writeFailed("kind")
+        }
+        let box: AES.GCM.SealedBox
+        do { box = try AES.GCM.seal(data, using: key, authenticating: Data("devicestudio.file.v1|\(meetingID)|\(kind)".utf8)) }
+        catch { throw SpoolError.writeFailed("seal") }
+        guard let sealed = box.combined else { throw SpoolError.writeFailed("seal") }
+        try durableWrite(sealed, to: meetingDirectory.appendingPathComponent("\(kind).sealed"))
+    }
+
+    /// Open a file written by `writeSealed`. Nil if it does not exist.
+    public func readSealed(_ kind: String) throws -> Data? {
+        let url = meetingDirectory.appendingPathComponent("\(kind).sealed")
+        guard let sealed = try? Data(contentsOf: url) else { return nil }
+        guard let box = try? AES.GCM.SealedBox(combined: sealed),
+              let plain = try? AES.GCM.open(box, using: key, authenticating: Data("devicestudio.file.v1|\(meetingID)|\(kind)".utf8)) else {
+            throw SpoolError.authenticationFailed(file: url.lastPathComponent)
+        }
+        return plain
+    }
+
+    /// Every readable segment of one channel, in order, for transcription. Unreadable ones are skipped
+    /// (the recovery pass reports them).
+    public func readableSegments(_ channel: CaptureChannel) -> [AudioSegment] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.compactMap { Self.sequence(from: $0, channel: channel) }.sorted()
+            .compactMap { try? read(channel, sequence: $0) }
+    }
+
+    private func durableWrite(_ bytes: Data, to final: URL) throws {
+        let temp = final.deletingLastPathComponent().appendingPathComponent(".tmp-" + final.lastPathComponent)
+        let fd = open(temp.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        guard fd >= 0 else { throw SpoolError.writeFailed("open") }
+        var ok = bytes.withUnsafeBytes { raw -> Bool in
+            var offset = 0
+            while offset < raw.count {
+                let n = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
+        }
+        ok = ok && fcntl(fd, F_FULLFSYNC) == 0
+        close(fd)
+        guard ok, rename(temp.path, final.path) == 0 else { unlink(temp.path); throw SpoolError.writeFailed("write") }
+        let dirFD = open(final.deletingLastPathComponent().path, O_RDONLY)
+        if dirFD >= 0 { _ = fcntl(dirFD, F_FULLFSYNC); close(dirFD) }
+    }
+
     /// Remove this meeting's audio files. Destroying the meeting key is what makes the audio unrecoverable
     /// (overwriting is not reliable on an SSD); removing the files only reclaims the space.
     public func removeFiles() {

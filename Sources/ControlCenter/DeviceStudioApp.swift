@@ -8,6 +8,9 @@ import Darwin
     @StateObject private var model = AppModel()
 
     init() {
+        if CommandLine.arguments.contains("--self-test-notes") {
+            exit(NotesSelfTest.run())
+        }
         if CommandLine.arguments.contains("--diagnose") {
             exit(Diagnostics.run())
         }

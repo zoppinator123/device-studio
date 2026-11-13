@@ -12,6 +12,10 @@ struct MeetingRecord: Codable, Identifiable, Equatable {
         case recorded       // stopped normally
         case interrupted    // recovered after the app or Mac stopped mid-recording
         case unreadable     // its key is gone; the audio cannot be opened
+        case transcribing
+        case makingNotes
+        case ready          // transcript and notes are saved, encrypted
+        case failed         // transcript or notes could not be made; `problem` says why
     }
     var id: String
     var startedAt: Date
@@ -22,6 +26,9 @@ struct MeetingRecord: Codable, Identifiable, Equatable {
     var systemSegments: Int = 0
     var damagedSegments: Int = 0
     var status: Status = .recording
+    var problem: String?
+    var echoesDropped: Int?
+    var notesSeconds: Int?
 }
 
 /// A message on the Meetings page.
@@ -42,6 +49,12 @@ struct MeetingNotice: Identifiable, Equatable {
     @Published private(set) var systemAudioPath: String?
     @Published private(set) var echoState: String?
     @Published var askWhetherToStop = false
+    /// What the page is showing in its reader sheet.
+    @Published var reading: Reading?
+    struct Reading: Identifiable { let id = UUID(); let title: String; let text: String }
+    /// Settings, kept current by AppModel.
+    var settings = MeetingSettings()
+    var engine: NotesEngine { NotesEngine.resolve(settings.enginePath) }
     @Published var showExplainer = false
 
     let root: URL
@@ -171,6 +184,7 @@ struct MeetingNotice: Identifiable, Equatable {
                 notices.append(MeetingNotice(text: "Recording stopped at the 8-hour limit.", kind: .info))
             }
         case .stopped(let summary):
+            var finished: MeetingRecord?
             if var record = current {
                 record.endedAt = Date()
                 record.durationSeconds = Int(summary.endMs / 1000)
@@ -178,6 +192,7 @@ struct MeetingNotice: Identifiable, Equatable {
                 record.systemSegments = summary.segments[.system] ?? 0
                 record.status = .recorded
                 update(record)
+                finished = record
             }
             current = nil
             session = nil
@@ -187,7 +202,70 @@ struct MeetingNotice: Identifiable, Equatable {
             askWhetherToStop = false
             systemAudioPath = nil
             echoState = nil
+            if let finished, settings.autoNotes, engine.problem == nil { makeNotes(finished) }
         }
+    }
+
+    // MARK: Transcript and notes
+
+    /// Transcribe both channels and write notes, entirely on this Mac. Results are sealed with the
+    /// meeting's own key next to its audio.
+    func makeNotes(_ record: MeetingRecord) {
+        guard !isRecording || record.id != current?.id else { return }
+        guard ![.transcribing, .makingNotes, .unreadable].contains(record.status) else { return }
+        let engine = self.engine
+        var working = record
+        working.status = .transcribing
+        working.problem = nil
+        update(working)
+        let root = self.root, keys = self.keys
+        Task.detached(priority: .userInitiated) {
+            let started = Date()
+            do {
+                let key = try keys.load(for: record.id)
+                let spool = try AudioSpool(root: root, meetingID: record.id, key: key)
+                let channels = record.sources.compactMap(CaptureChannel.init(rawValue:))
+                let transcript = try MeetingProcessor.transcribe(spool: spool, channels: channels, engine: engine)
+                try spool.writeSealed("transcript", Data(transcript.text.utf8))
+                await MainActor.run {
+                    working.status = .makingNotes
+                    working.echoesDropped = transcript.echoesDropped
+                    self.update(working)
+                }
+                let title = "Meeting " + record.startedAt.formatted(date: .abbreviated, time: .shortened)
+                let notes = try MeetingProcessor.makeNotes(transcript: transcript.text, title: title, date: record.startedAt, engine: engine)
+                try spool.writeSealed("notes", Data(notes.markdown.utf8))
+                try spool.writeSealed("notes-json", notes.json)
+                await MainActor.run {
+                    working.status = .ready
+                    working.notesSeconds = Int(Date().timeIntervalSince(started))
+                    self.update(working)
+                }
+            } catch {
+                await MainActor.run {
+                    working.status = .failed
+                    working.problem = (error as? LocalizedError)?.errorDescription ?? "Notes could not be made."
+                    self.update(working)
+                }
+            }
+        }
+    }
+
+    /// Decrypt and show a meeting's notes or transcript.
+    func open(_ record: MeetingRecord, kind: String) {
+        do {
+            let key = try keys.load(for: record.id)
+            let spool = try AudioSpool(root: root, meetingID: record.id, key: key)
+            guard let data = try spool.readSealed(kind) else { return }
+            let when = record.startedAt.formatted(date: .abbreviated, time: .shortened)
+            reading = Reading(title: (kind == "notes" ? "Notes · " : "Transcript · ") + when, text: String(decoding: data, as: UTF8.self))
+        } catch {
+            notices.append(MeetingNotice(text: "That file could not be opened. It may be damaged, or its key is missing.", kind: .warning))
+        }
+    }
+
+    func hasSealed(_ record: MeetingRecord, _ kind: String) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(record.id).appendingPathComponent("\(kind).sealed").path)
     }
 
     // MARK: Library
@@ -195,6 +273,12 @@ struct MeetingNotice: Identifiable, Equatable {
     /// On launch: a meeting still marked as recording was cut off by a quit, crash or power loss. Keep what
     /// was saved and mark it, using the spool's own recovery pass.
     func recoverInterruptedRecordings() {
+        // Notes that were being made when the app stopped: let them be made again.
+        for var record in meetings where record.status == .transcribing || record.status == .makingNotes {
+            record.status = .failed
+            record.problem = "Device Studio quit before the notes were finished."
+            update(record)
+        }
         for var record in meetings where record.status == .recording {
             guard let key = try? keys.load(for: record.id),
                   let spool = try? AudioSpool(root: root, meetingID: record.id, key: key) else {
@@ -215,7 +299,7 @@ struct MeetingNotice: Identifiable, Equatable {
 
     /// Destroy the key first (that alone makes the audio unrecoverable), then the files and the entry.
     func delete(_ record: MeetingRecord) {
-        guard record.id != current?.id else { return }
+        guard record.id != current?.id, record.status != .transcribing, record.status != .makingNotes else { return }
         do { try keys.destroy(for: record.id) } catch {
             notices.append(MeetingNotice(text: "The recording’s key could not be removed from the Keychain, so it was kept.", kind: .warning))
             return

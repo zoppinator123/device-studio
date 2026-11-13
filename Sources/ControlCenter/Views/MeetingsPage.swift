@@ -40,6 +40,21 @@ struct MeetingsPage: View {
             }
 
             Section {
+                Toggle("Make notes when a recording stops", isOn: $model.settings.meetings.autoNotes)
+                HStack(alignment: .firstTextBaseline) {
+                    StatusLabel(text: engineProblem ?? "Ready: speech model checked before each use, network blocked while it runs.",
+                                level: engineProblem == nil ? .good : .attention)
+                    Spacer(minLength: 12)
+                    Button("Choose Folder…", action: chooseEngineFolder)
+                }
+                Text(recorder.engine.root.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            } header: {
+                Text("Transcripts and Notes")
+            } footer: {
+                SectionFooter("Transcription (Parakeet) and notes (a local language model) run on this Mac from a separate engine folder. They read audio and text through a pipe; the transcript and notes are saved encrypted with the meeting’s key.")
+            }
+
+            Section {
                 Picker("Echo cancellation", selection: $model.settings.meetings.echo) {
                     ForEach(MeetingEchoMode.allCases) { Text($0.title).tag($0) }
                 }
@@ -62,14 +77,26 @@ struct MeetingsPage: View {
                         }
                         Spacer(minLength: 12)
                         StatusLabel(text: statusText(record), level: statusLevel(record))
+                        if record.status == .transcribing || record.status == .makingNotes {
+                            ProgressView().controlSize(.small)
+                        }
+                        if recorder.hasSealed(record, "notes") {
+                            Button("Notes") { recorder.open(record, kind: "notes") }
+                        }
+                        if recorder.hasSealed(record, "transcript") {
+                            Button("Transcript") { recorder.open(record, kind: "transcript") }
+                        }
+                        if [.recorded, .interrupted, .failed].contains(record.status) && engineProblem == nil {
+                            Button(record.status == .failed ? "Try Again" : "Make Notes") { recorder.makeNotes(record) }
+                        }
                         Button("Delete…") { pendingDelete = record }
-                            .disabled(record.status == .recording)
+                            .disabled([.recording, .transcribing, .makingNotes].contains(record.status))
                     }
                 }
             } header: {
                 Text("Recordings")
             } footer: {
-                SectionFooter("Audio is encrypted on this Mac with a separate key per meeting, kept in your Keychain. It is never uploaded. Turning recordings into transcripts and notes is not part of this version yet.")
+                SectionFooter("Audio, transcripts and notes are encrypted on this Mac with a separate key per meeting, kept in your Keychain. Nothing is uploaded.")
             }
 
             Section {
@@ -83,6 +110,7 @@ struct MeetingsPage: View {
         .formStyle(.grouped)
         .navigationTitle("Meetings")
         .sheet(isPresented: $recorder.showExplainer) { ExplainerSheet(recorder: recorder) }
+        .sheet(item: $recorder.reading) { reading in ReaderSheet(reading: reading) }
         .alert("Still recording?", isPresented: $recorder.askWhetherToStop) {
             Button("Keep Recording", action: recorder.keepRecording)
             Button("Stop", role: .destructive, action: recorder.stop)
@@ -94,6 +122,18 @@ struct MeetingsPage: View {
         } message: { _ in
             Text("Its key is destroyed first, so the audio can’t be recovered.")
         }
+    }
+
+    private var engineProblem: String? { recorder.engine.problem }
+
+    private func chooseEngineFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.directoryURL = recorder.engine.root
+        panel.message = "Choose the folder that holds the transcription and notes engines."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.settings.meetings.enginePath = url.path
+        recorder.settings.enginePath = url.path
     }
 
     private var deleteIsPresented: Binding<Bool> {
@@ -113,13 +153,17 @@ struct MeetingsPage: View {
         case .recorded: return "Saved"
         case .interrupted: return "Interrupted, saved up to the stop"
         case .unreadable: return "Key missing"
+        case .transcribing: return "Transcribing…"
+        case .makingNotes: return "Writing notes…"
+        case .ready: return "Notes ready"
+        case .failed: return r.problem ?? "Notes failed"
         }
     }
 
     private func statusLevel(_ r: MeetingRecord) -> StatusLevel {
         switch r.status {
-        case .recording, .recorded: return .good
-        case .interrupted: return .attention
+        case .recording, .recorded, .ready, .transcribing, .makingNotes: return .good
+        case .interrupted, .failed: return .attention
         case .unreadable: return .inactive
         }
     }
@@ -203,5 +247,35 @@ struct RecordingBadge: View {
             .labelStyle(.titleAndIcon)
             .help("A meeting is being recorded")
         }
+    }
+}
+
+/// Shows decrypted notes or a transcript. The text exists only in memory while this is open.
+private struct ReaderSheet: View {
+    let reading: MeetingRecorder.Reading
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(reading.title).font(.title3.bold())
+            ScrollView {
+                Text(rendered).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(reading.text, forType: .string)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620, minHeight: 520)
+    }
+
+    private var rendered: AttributedString {
+        (try? AttributedString(markdown: reading.text,
+                               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(reading.text)
     }
 }
