@@ -53,6 +53,12 @@ struct MeetingNotice: Identifiable, Equatable {
     @Published var askWhetherToStop = false
     /// The live transcript of the meeting being recorded, both channels merged, echo removed.
     @Published private(set) var liveLines: [TimedText] = []
+    /// Google Meet tabs connected through the Chrome extension.
+    @Published private(set) var meetTabs = 0
+    /// People named by Google Meet during this recording.
+    @Published private(set) var meetNames: [String] = []
+    /// Called whenever recording starts or stops, so the Chrome extension can follow.
+    var onRecordingChange: ((Bool) -> Void)?
     /// What the page is showing in its reader sheet.
     @Published var reading: Reading?
     struct Reading: Identifiable { let id = UUID(); let title: String; let text: String }
@@ -68,6 +74,10 @@ struct MeetingNotice: Identifiable, Equatable {
     private var ticker: AnyCancellable?
     private var transcribers: [CaptureChannel: LiveTranscriber] = [:]
     private var rawLines: [TimedText] = []
+    private var speakers = SpeakerTimeline()
+    /// The moment the capture clock read zero, to place caption times on the meeting's clock.
+    private var clockZero: Date?
+    private var meetTitle: String?
     private var currentSpool: AudioSpool?
     private let sealQueue = DispatchQueue(label: "com.jackzoppa.devicestudio.transcript-seal")
 
@@ -123,6 +133,7 @@ struct MeetingNotice: Identifiable, Equatable {
             configuration.spoolAudio = settings.keepAudio
             configuration.segmentSeconds = live ? 1 : 5
             rawLines = []; liveLines = []; transcribers = [:]
+            speakers = SpeakerTimeline(); meetNames = []; meetTitle = nil
             if live {
                 try engine.verifySpeechModel()
                 for channel in sources {
@@ -135,12 +146,14 @@ struct MeetingNotice: Identifiable, Equatable {
             let session = CaptureSession(spool: spool, configuration: configuration) { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             }
+            clockZero = Date()
             try session.start()
             self.session = session
             current = record
             startedAt = record.startedAt
             elapsed = 0
             isRecording = true
+            onRecordingChange?(true)
             ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect().sink { [weak self] _ in
                 guard let self, let startedAt = self.startedAt else { return }
                 self.elapsed = Date().timeIntervalSince(startedAt)
@@ -228,6 +241,7 @@ struct MeetingNotice: Identifiable, Equatable {
             current = nil
             session = nil
             isRecording = false
+            onRecordingChange?(false)
             startedAt = nil
             ticker = nil
             askWhetherToStop = false
@@ -244,6 +258,8 @@ struct MeetingNotice: Identifiable, Equatable {
     // MARK: Live transcript
 
     private func appendLive(_ line: TimedText) {
+        var line = line
+        if line.channel == .system { line.speaker = speakers.speaker(for: line) }
         rawLines.append(line)
         liveLines = TranscriptAssembler.merge(rawLines).lines
         saveLiveTranscript()
@@ -271,6 +287,8 @@ struct MeetingNotice: Identifiable, Equatable {
         Task.detached(priority: .userInitiated) {
             let clean = pending.map { $0.finish() }.allSatisfy { $0 }
             await MainActor.run {
+                self.rawLines = self.speakers.label(self.rawLines)
+                self.saveSpeakers()
                 let merged = TranscriptAssembler.merge(self.rawLines)
                 self.liveLines = merged.lines
                 self.saveLiveTranscript()
@@ -292,6 +310,53 @@ struct MeetingNotice: Identifiable, Equatable {
                 }
             }
         }
+    }
+
+    // MARK: Google Meet speakers
+
+    /// One message from the Chrome extension. Only used while recording, and only kept in memory, except
+    /// that the names and captions are sealed with the meeting's key at the end so notes can be made again.
+    func meetMessage(_ message: [String: Any]) {
+        guard isRecording, settings.meetSpeakers, let zero = clockZero else { return }
+        switch message["type"] as? String {
+        case "caption":
+            guard let speaker = message["speaker"] as? String, let text = message["text"] as? String,
+                  let at = (message["at"] as? NSNumber)?.doubleValue, text.count <= 2_000 else { return }
+            let ms = Int64(at - zero.timeIntervalSince1970 * 1000)
+            guard ms >= -10_000, ms <= Int64(elapsed * 1000) + 60_000 else { return }
+            speakers.add(speaker: speaker, text: text, atMs: ms)
+            relabelRecent(around: ms)
+        case "participants":
+            for name in (message["names"] as? [String] ?? []).prefix(200) { speakers.note(name) }
+        case "meeting":
+            if let title = message["title"] as? String, !title.isEmpty, title.count <= 200 { meetTitle = title }
+        default:
+            return
+        }
+        if meetNames != speakers.names { meetNames = speakers.names }
+    }
+
+    func meetTabsChanged(_ count: Int) { meetTabs = count }
+
+    /// Captions trail the audio, so a line that arrived before its caption is named once the caption comes.
+    private func relabelRecent(around ms: Int64) {
+        var changed = false
+        for i in rawLines.indices.reversed() {
+            let line = rawLines[i]
+            if line.endMs < ms - 20_000 { break }
+            guard line.channel == .system else { continue }
+            let name = speakers.speaker(for: line)
+            if name != line.speaker { rawLines[i].speaker = name; changed = true }
+        }
+        guard changed else { return }
+        liveLines = TranscriptAssembler.merge(rawLines).lines
+        saveLiveTranscript()
+    }
+
+    private func saveSpeakers() {
+        guard let spool = currentSpool, !speakers.captions.isEmpty || !speakers.names.isEmpty,
+              let data = try? JSONEncoder().encode(SavedSpeakers(title: meetTitle, timeline: speakers)) else { return }
+        sealQueue.async { try? spool.writeSealed("speakers", data) }
     }
 
     // MARK: Transcript and notes
@@ -319,7 +384,8 @@ struct MeetingNotice: Identifiable, Equatable {
                     guard let saved = try spool.readSealed("transcript"), !saved.isEmpty else { throw ProcessingError.nothingRecorded }
                     transcript = (String(decoding: saved, as: UTF8.self), record.echoesDropped ?? 0)
                 } else {
-                    transcript = try MeetingProcessor.transcribe(spool: spool, channels: channels, engine: engine)
+                    let timeline = (try? spool.readSealed("speakers")).flatMap { try? JSONDecoder().decode(SavedSpeakers.self, from: $0) }
+                    transcript = try MeetingProcessor.transcribe(spool: spool, channels: channels, engine: engine, speakers: timeline?.timeline)
                     try spool.writeSealed("transcript", Data(transcript.text.utf8))
                 }
                 await MainActor.run {
@@ -327,8 +393,10 @@ struct MeetingNotice: Identifiable, Equatable {
                     working.echoesDropped = transcript.echoesDropped
                     self.update(working)
                 }
-                let title = "Meeting " + record.startedAt.formatted(date: .abbreviated, time: .shortened)
-                let notes = try MeetingProcessor.makeNotes(transcript: transcript.text, title: title, date: record.startedAt, engine: engine)
+                let saved = (try? spool.readSealed("speakers")).flatMap { try? JSONDecoder().decode(SavedSpeakers.self, from: $0) }
+                let title = saved?.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Meeting " + record.startedAt.formatted(date: .abbreviated, time: .shortened)
+                let notes = try MeetingProcessor.makeNotes(transcript: transcript.text, title: title, date: record.startedAt,
+                                                           attendees: saved?.timeline.names ?? [], engine: engine)
                 try spool.writeSealed("notes", Data(notes.markdown.utf8))
                 try spool.writeSealed("notes-json", notes.json)
                 await MainActor.run {
@@ -455,4 +523,10 @@ struct MeetingNotice: Identifiable, Equatable {
         let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
+}
+
+/// What Google Meet told us about a meeting, sealed with the meeting's key.
+struct SavedSpeakers: Codable {
+    var title: String?
+    var timeline: SpeakerTimeline
 }

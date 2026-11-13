@@ -8,6 +8,12 @@ import Darwin
     @StateObject private var model = AppModel()
 
     init() {
+        if MeetBridge.isHostLaunch {
+            exit(MeetBridge.runHost())
+        }
+        if CommandLine.arguments.contains("--self-test-bridge") {
+            exit(NotesSelfTest.runBridge())
+        }
         if CommandLine.arguments.contains("--self-test-live") {
             exit(NotesSelfTest.runLive())
         }

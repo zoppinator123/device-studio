@@ -67,7 +67,7 @@ enum ProcessingError: Error, LocalizedError {
 enum MeetingProcessor {
     private static let noNetwork = "(version 1)(allow default)(deny network*)"
 
-    static func transcribe(spool: AudioSpool, channels: [CaptureChannel], engine: NotesEngine) throws -> (text: String, echoesDropped: Int) {
+    static func transcribe(spool: AudioSpool, channels: [CaptureChannel], engine: NotesEngine, speakers: SpeakerTimeline? = nil) throws -> (text: String, echoesDropped: Int) {
         if let problem = engine.problem { throw ProcessingError.engineMissing(problem) }
         try engine.verifySpeechModel()
         var lines: [TimedText] = []
@@ -93,13 +93,15 @@ enum MeetingProcessor {
             input.resetBytes(in: 0..<input.count)          // do not leave audio lying in freed memory longer than needed
         }
         guard anyAudio else { throw ProcessingError.nothingRecorded }
-        let merged = TranscriptAssembler.merge(lines)
+        let merged = TranscriptAssembler.merge(speakers?.label(lines) ?? lines)
         return (TranscriptAssembler.render(merged.lines), merged.echoesDropped)
     }
 
-    static func makeNotes(transcript: String, title: String, date: Date, engine: NotesEngine) throws -> (markdown: String, json: Data) {
+    static func makeNotes(transcript: String, title: String, date: Date, attendees: [String] = [], engine: NotesEngine) throws -> (markdown: String, json: Data) {
         if let problem = engine.problem { throw ProcessingError.engineMissing(problem) }
-        let meta = try JSONSerialization.data(withJSONObject: ["title": title, "date": ISO8601DateFormatter().string(from: date)])
+        var fields: [String: Any] = ["title": title, "date": ISO8601DateFormatter().string(from: date)]
+        if !attendees.isEmpty { fields["attendees"] = attendees }
+        let meta = try JSONSerialization.data(withJSONObject: fields)
         let output = try run(engine.python, ["-I", engine.notesScript.path, "--stdin", "--json-stdout",
                                              "--meta-json", String(decoding: meta, as: UTF8.self)],
                              input: Data(transcript.utf8))

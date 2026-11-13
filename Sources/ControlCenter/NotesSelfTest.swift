@@ -105,4 +105,85 @@ enum NotesSelfTest {
         if let last = assembler.flush() { segments.append(last) }
         for s in segments { try spool.append(s) }
     }
+
+    /// `--self-test-bridge`: the Chrome extension path without Chrome. Starts the app's socket on a private
+    /// path, launches this executable as Chrome would launch the native host, sends a caption the way the
+    /// extension does, and checks it arrives, that the recording state comes back, and that a stranger's
+    /// extension ID is refused.
+    static func runBridge() -> Int32 {
+        let folder = URL(fileURLWithPath: "/tmp").appendingPathComponent("ds-bridge-\(UInt32.random(in: 0...UInt32.max))")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let socketPath = folder.appendingPathComponent("b.sock").path
+        setenv("DEVICESTUDIO_BRIDGE_SOCKET", socketPath, 1)
+        var received: [[String: Any]] = []
+        var clients = 0
+        let server = MeetBridgeServer(onMessage: { received.append($0) }, onClientsChanged: { clients = $0 })
+        func pump(until done: () -> Bool, seconds: Double = 5) -> Bool {
+            let end = Date().addingTimeInterval(seconds)
+            while !done() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            return done()
+        }
+        func frame(_ object: [String: Any]) -> Data {
+            let body = try! JSONSerialization.data(withJSONObject: object)
+            var length = UInt32(body.count).littleEndian
+            return Data(bytes: &length, count: 4) + body
+        }
+        do {
+            try server.start()
+            defer { server.stop() }
+            server.broadcast(["type": "state", "recording": true, "speakers": true])
+
+            // A stranger's extension is refused.
+            let stranger = Process()
+            stranger.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+            stranger.arguments = ["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]
+            stranger.standardInput = Pipe(); stranger.standardOutput = Pipe()
+            try stranger.run(); stranger.waitUntilExit()
+            guard stranger.terminationStatus != 0 else { print("FAIL: an unknown extension was accepted"); return 1 }
+            print("PASS: unknown extension refused")
+
+            let host = Process(), input = Pipe(), output = Pipe()
+            host.executableURL = stranger.executableURL
+            host.arguments = ["chrome-extension://\(MeetBridge.extensionID)/", "--parent-window=0"]
+            host.standardInput = input; host.standardOutput = output
+            try host.run()
+            defer { if host.isRunning { host.terminate() } }
+            let at = Date().timeIntervalSince1970 * 1000
+            input.fileHandleForWriting.write(frame(["type": "caption", "speaker": "Dana Ruiz", "text": "we should move the launch to March", "at": at]))
+            input.fileHandleForWriting.write(frame(["type": "participants", "names": ["Dana Ruiz", "Sam Lee"]]))
+            guard pump(until: { received.count >= 2 }) else { print("FAIL: the app did not receive the extension's messages"); return 1 }
+            guard received[0]["speaker"] as? String == "Dana Ruiz", received[1]["type"] as? String == "participants" else {
+                print("FAIL: messages arrived changed"); return 1
+            }
+            print("PASS: captions reach the app (\(clients) host connected)")
+
+            // The state the app broadcast reaches Chrome, length-prefixed.
+            let reader = output.fileHandleForReading
+            var length: UInt32 = 0
+            let head = reader.readData(ofLength: 4)
+            guard head.count == 4 else { print("FAIL: no reply from the host"); return 1 }
+            _ = withUnsafeMutableBytes(of: &length) { head.copyBytes(to: $0) }
+            let body = reader.readData(ofLength: Int(UInt32(littleEndian: length)))
+            guard let state = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+                  state["recording"] as? Bool == true else { print("FAIL: recording state did not reach Chrome"); return 1 }
+            print("PASS: recording state reaches the extension")
+
+            // The caption names the matching line.
+            var timeline = SpeakerTimeline()
+            timeline.add(speaker: "Dana Ruiz", text: "we should move the launch to March", atMs: 2_000)
+            let line = TimedText(channel: .system, startMs: 0, endMs: 1_800, text: "We should move the launch to March.")
+            guard timeline.label([line]).first?.label == "Dana Ruiz" else { print("FAIL: line not named"); return 1 }
+            print("PASS: transcript line named Dana Ruiz")
+
+            try? input.fileHandleForWriting.close()
+            host.waitUntilExit()
+            guard host.terminationStatus == 0 else { print("FAIL: host did not exit cleanly"); return 1 }
+            print("PASS: host exits when Chrome closes it")
+            return 0
+        } catch {
+            print("FAIL: \(error)")
+            return 1
+        }
+    }
 }

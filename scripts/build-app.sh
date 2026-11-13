@@ -16,6 +16,9 @@ APP="$PWD/dist/Device Studio.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/DeviceStudio" "$APP/Contents/MacOS/DeviceStudio"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
+# The Google Meet extension, copied out to Application Support by the app for Chrome's "Load unpacked".
+rm -rf "$APP/Contents/Resources/ChromeExtension"
+cp -R ChromeExtension "$APP/Contents/Resources/ChromeExtension"
 swift scripts/make-icon.swift "$PWD/dist/AppIcon.iconset"
 iconutil -c icns "$PWD/dist/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 # Signing, in order of preference:

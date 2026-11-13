@@ -340,4 +340,46 @@ final class SealedFileTests: XCTestCase {
         XCTAssertEqual(spool.readableSegments(.microphone).map(\.sequence), [0, 2])
         XCTAssertEqual(spool.readableSegments(.system), [])
     }
+
+    // MARK: Speaker names
+
+    func testSpeakerTimelineNamesLinesByCaptionWords() {
+        var timeline = SpeakerTimeline()
+        timeline.add(speaker: "Dana Ruiz", text: "we should move the launch", atMs: 10_500)
+        timeline.add(speaker: "Dana Ruiz", text: "we should move the launch to March", atMs: 11_500)
+        timeline.add(speaker: "Sam Lee", text: "I can take the pricing page", atMs: 12_000)
+        timeline.add(speaker: "You", text: "sounds good", atMs: 12_500)
+        let dana = TimedText(channel: .system, startMs: 9_000, endMs: 11_000, text: "We should move the launch to March.")
+        let sam = TimedText(channel: .system, startMs: 11_200, endMs: 12_100, text: "I can take the pricing page.")
+        let me = TimedText(channel: .microphone, startMs: 12_000, endMs: 12_400, text: "Sounds good.")
+        let far = TimedText(channel: .system, startMs: 60_000, endMs: 61_000, text: "Anything else?")
+        let named = timeline.label([dana, sam, me, far])
+        XCTAssertEqual(named.map(\.speaker), ["Dana Ruiz", "Sam Lee", nil, nil])
+        XCTAssertEqual(named.map(\.label), ["Dana Ruiz", "Sam Lee", "Me", "Others"])
+        XCTAssertEqual(timeline.names, ["Dana Ruiz", "Sam Lee"])            // "You" is never a remote speaker
+    }
+
+    func testSpeakerTimelineFallsBackToMostCaptioned() {
+        var timeline = SpeakerTimeline()
+        timeline.add(speaker: "Ana", text: "uh", atMs: 5_000)
+        timeline.add(speaker: "Ben", text: "hmm", atMs: 5_200)
+        timeline.add(speaker: "Ben", text: "hmm right", atMs: 5_400)
+        let line = TimedText(channel: .system, startMs: 4_000, endMs: 5_000, text: "Totally different words")
+        XCTAssertEqual(timeline.speaker(for: line), "Ben")
+        // out-of-order arrival is kept sorted
+        timeline.add(speaker: "Cy", text: "early bird", atMs: 1_000)
+        XCTAssertEqual(timeline.captions.map(\.atMs), [1_000, 5_000, 5_200, 5_400])
+        XCTAssertEqual(timeline.speaker(for: TimedText(channel: .system, startMs: 0, endMs: 900, text: "early bird")), "Cy")
+    }
+
+    func testSpeakerNamesRenderSafely() {
+        XCTAssertNil(TimedText.cleanName("Me"))
+        XCTAssertNil(TimedText.cleanName("  others "))
+        XCTAssertNil(TimedText.cleanName(""))
+        XCTAssertEqual(TimedText.cleanName("Dr: Who\nX"), "Dr Who X")
+        let line = TimedText(channel: .system, startMs: 61_000, endMs: 62_000, text: "Hi.", speaker: "Dana: Ruiz")
+        XCTAssertEqual(TranscriptAssembler.render([line]), "[1:01] Dana Ruiz: Hi.\n")
+        let mine = TimedText(channel: .microphone, startMs: 0, endMs: 1, text: "Hey.", speaker: "Dana")
+        XCTAssertEqual(TranscriptAssembler.render([mine]), "[0:00] Me: Hey.\n")
+    }
 }

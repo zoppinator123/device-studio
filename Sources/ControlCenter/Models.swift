@@ -101,8 +101,10 @@ struct MeetingSettings: Codable, Equatable {
     var keepAudio = false
     /// Folder holding the local transcription and notes engines. Empty means the usual location.
     var enginePath = ""
+    /// Name the people on Google Meet calls using the Device Studio Chrome extension.
+    var meetSpeakers = true
     init() {}
-    private enum CodingKeys: String, CodingKey { case mode, echo, explainerAccepted, autoNotes, keepAudio, enginePath }
+    private enum CodingKeys: String, CodingKey { case mode, echo, explainerAccepted, autoNotes, keepAudio, enginePath, meetSpeakers }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         mode = (try? values.decode(MeetingMode.self, forKey: .mode)) ?? .call
@@ -111,6 +113,7 @@ struct MeetingSettings: Codable, Equatable {
         autoNotes = (try? values.decode(Bool.self, forKey: .autoNotes)) ?? true
         keepAudio = (try? values.decode(Bool.self, forKey: .keepAudio)) ?? false
         enginePath = (try? values.decode(String.self, forKey: .enginePath)) ?? ""
+        meetSpeakers = (try? values.decode(Bool.self, forKey: .meetSpeakers)) ?? true
     }
 }
 
