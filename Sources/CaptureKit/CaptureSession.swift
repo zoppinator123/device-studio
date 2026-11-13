@@ -13,6 +13,11 @@ public final class CaptureSession {
         /// Refuse to start with less free space than this (about 230 MB per hour is written).
         public var minimumFreeBytes: Int64 = 2_000_000_000
         public var echoCancellation: EchoCancellation = .off
+        /// Write audio to the encrypted spool. Off for transcript-only meetings: segments are handed to the
+        /// host (for live transcription) and never touch the disk.
+        public var spoolAudio = true
+        /// Segment length. Short segments (1 s) keep live transcription close behind the speaker.
+        public var segmentSeconds: Double = 5
         public var limits = CaptureWatchdog.Limits()
         public init() {}
     }
@@ -113,7 +118,9 @@ public final class CaptureSession {
             }
             work.sync {
                 summary = Summary()
-                for channel in active { assemblers[channel] = SegmentAssembler(channel: channel) }
+                for channel in active {
+                    assemblers[channel] = SegmentAssembler(channel: channel, segmentSeconds: configuration.segmentSeconds)
+                }
                 watchdog = CaptureWatchdog(channels: active, limits: configuration.limits)
                 summary.activeSources = active
             }
@@ -269,7 +276,7 @@ public final class CaptureSession {
 
     private func store(_ segment: AudioSegment) {
         do {
-            try spool.append(segment)
+            if configuration.spoolAudio { try spool.append(segment) }
             summary.segments[segment.channel, default: 0] += 1
             summary.endMs = max(summary.endMs, segment.startMs + segment.durationMs)
             onEvent(.segment(segment))

@@ -97,16 +97,19 @@ struct MeetingSettings: Codable, Equatable {
     var explainerAccepted = false
     /// Make a transcript and notes as soon as a recording stops.
     var autoNotes = true
+    /// Keep the audio as well as the live transcript. Off by default: only the transcript is saved.
+    var keepAudio = false
     /// Folder holding the local transcription and notes engines. Empty means the usual location.
     var enginePath = ""
     init() {}
-    private enum CodingKeys: String, CodingKey { case mode, echo, explainerAccepted, autoNotes, enginePath }
+    private enum CodingKeys: String, CodingKey { case mode, echo, explainerAccepted, autoNotes, keepAudio, enginePath }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         mode = (try? values.decode(MeetingMode.self, forKey: .mode)) ?? .call
         echo = (try? values.decode(MeetingEchoMode.self, forKey: .echo)) ?? .off
         explainerAccepted = (try? values.decode(Bool.self, forKey: .explainerAccepted)) ?? false
         autoNotes = (try? values.decode(Bool.self, forKey: .autoNotes)) ?? true
+        keepAudio = (try? values.decode(Bool.self, forKey: .keepAudio)) ?? false
         enginePath = (try? values.decode(String.self, forKey: .enginePath)) ?? ""
     }
 }

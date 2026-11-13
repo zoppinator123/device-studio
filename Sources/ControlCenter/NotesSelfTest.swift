@@ -38,6 +38,53 @@ enum NotesSelfTest {
         }
     }
 
+    /// `--self-test-live`: the live path. Two invented speakers are fed to two live engines in real time,
+    /// one second at a time, as during a meeting; reports how soon each line appears after it is spoken.
+    static func runLive() -> Int32 {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("ds-selftest-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        do {
+            try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+            let me = try speak("First point. The database is at ninety five percent memory.", in: temp, name: "me")
+            let them = try speak("Got it. I will upgrade the plan by Friday.", in: temp, name: "them")
+            let engine = NotesEngine.resolve("")
+            if let problem = engine.problem { print("FAIL: \(problem)"); return 1 }
+            try engine.verifySpeechModel()
+            let lock = NSLock(); var lines: [(TimedText, TimeInterval)] = []
+            let started = Date()
+            let transcribers = try [CaptureChannel.microphone, .system].map { channel in
+                try LiveTranscriber(channel: channel, engine: engine) { line in
+                    lock.lock(); lines.append((line, Date().timeIntervalSince(started))); lock.unlock()
+                    print(String(format: "  +%4.1fs  %@: %@", Date().timeIntervalSince(started), channel == .microphone ? "Me" : "Them", line.text))
+                }
+            }
+            Thread.sleep(forTimeInterval: 4)     // let both engines load, as they do when recording starts
+            // Me talks from 0 s, Them answers from 6 s; 1-second segments, sent when their second has passed.
+            let total = 12
+            let clockStart = Date()
+            for second in 0..<total {
+                for (index, samples) in [me, them].enumerated() {
+                    let offset = (index == 0 ? 0 : 6) * 16_000
+                    let from = second * 16_000 - offset
+                    var chunk = [Float](repeating: 0, count: 16_000)
+                    for i in 0..<16_000 where from + i >= 0 && from + i < samples.count { chunk[i] = samples[from + i] }
+                    transcribers[index].send(AudioSegment(channel: index == 0 ? .microphone : .system, sequence: second,
+                                                          startMs: Int64(second) * 1_000, sampleRate: 16_000, samples: chunk))
+                }
+                Thread.sleep(until: clockStart.addingTimeInterval(Double(second + 1)))
+            }
+            let ok = transcribers.map { $0.finish() }.allSatisfy { $0 }
+            let merged = TranscriptAssembler.merge(lines.map(\.0)).lines
+            print("Transcript:\n" + TranscriptAssembler.render(merged))
+            let pass = ok && merged.contains { $0.channel == .microphone } && merged.contains { $0.channel == .system }
+            print(pass ? "PASS: live transcription works" : "FAIL: missing lines")
+            return pass ? 0 : 1
+        } catch {
+            print("FAIL: \((error as? LocalizedError)?.errorDescription ?? String(describing: error))")
+            return 1
+        }
+    }
+
     private static func speak(_ text: String, in dir: URL, name: String) throws -> [Float] {
         let aiff = dir.appendingPathComponent("\(name).aiff"), wav = dir.appendingPathComponent("\(name).wav")
         for (tool, args) in [("/usr/bin/say", ["-o", aiff.path, text]),

@@ -8,6 +8,9 @@ import Darwin
     @StateObject private var model = AppModel()
 
     init() {
+        if CommandLine.arguments.contains("--self-test-live") {
+            exit(NotesSelfTest.runLive())
+        }
         if CommandLine.arguments.contains("--self-test-notes") {
             exit(NotesSelfTest.run())
         }
@@ -24,6 +27,11 @@ import Darwin
         }
         .defaultSize(width: 920, height: 720)
         .commands { CommandGroup(replacing: .newItem) {} }
+
+        Window("Live Transcript", id: "live-transcript") {
+            LiveTranscriptView(recorder: model.meetings)
+        }
+        .defaultSize(width: 420, height: 640)
 
         MenuBarExtra {
             MenuContent(model: model, mouse: model.mouse, recorder: model.meetings)
@@ -55,8 +63,14 @@ struct MenuContent: View {
 
     var body: some View {
         Button(recorder.isRecording ? "Stop Recording" : "Record Meeting") {
-            if !recorder.isRecording && !model.settings.meetings.explainerAccepted { openWindow(id: "main") }
+            let starting = !recorder.isRecording
+            if starting && !model.settings.meetings.explainerAccepted { openWindow(id: "main") }
             model.toggleRecording()
+            if starting && model.settings.meetings.explainerAccepted { openWindow(id: "live-transcript") }
+        }
+        Button("Show Live Transcript") {
+            openWindow(id: "live-transcript")
+            NSApp.activate(ignoringOtherApps: true)
         }
         Divider()
         Button("Open Device Studio") {

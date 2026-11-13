@@ -29,6 +29,8 @@ struct MeetingRecord: Codable, Identifiable, Equatable {
     var problem: String?
     var echoesDropped: Int?
     var notesSeconds: Int?
+    /// False when only the live transcript was kept (nil for recordings made before that option existed).
+    var audioKept: Bool?
 }
 
 /// A message on the Meetings page.
@@ -49,6 +51,8 @@ struct MeetingNotice: Identifiable, Equatable {
     @Published private(set) var systemAudioPath: String?
     @Published private(set) var echoState: String?
     @Published var askWhetherToStop = false
+    /// The live transcript of the meeting being recorded, both channels merged, echo removed.
+    @Published private(set) var liveLines: [TimedText] = []
     /// What the page is showing in its reader sheet.
     @Published var reading: Reading?
     struct Reading: Identifiable { let id = UUID(); let title: String; let text: String }
@@ -62,6 +66,10 @@ struct MeetingNotice: Identifiable, Equatable {
     private var session: CaptureSession?
     private var current: MeetingRecord?
     private var ticker: AnyCancellable?
+    private var transcribers: [CaptureChannel: LiveTranscriber] = [:]
+    private var rawLines: [TimedText] = []
+    private var currentSpool: AudioSpool?
+    private let sealQueue = DispatchQueue(label: "com.jackzoppa.devicestudio.transcript-seal")
 
     init(root: URL) {
         self.root = root
@@ -95,7 +103,14 @@ struct MeetingNotice: Identifiable, Equatable {
             }
         }
         let id = Self.newMeetingID()
-        let record = MeetingRecord(id: id, startedAt: Date(), sources: sources.map(\.rawValue).sorted())
+        var record = MeetingRecord(id: id, startedAt: Date(), sources: sources.map(\.rawValue).sorted())
+        let engine = self.engine
+        let live = engine.problem == nil
+        guard live || settings.keepAudio else {
+            notices.append(MeetingNotice(text: "Live transcription isn’t available: \(engine.problem ?? ""). Turn on “Keep audio” to record without it.", kind: .warning))
+            return
+        }
+        record.audioKept = settings.keepAudio
         do {
             // The key and the meeting's entry are saved before the first sample is accepted.
             let key = try keys.create(for: id)
@@ -105,6 +120,18 @@ struct MeetingNotice: Identifiable, Equatable {
             var configuration = CaptureSession.Configuration()
             configuration.sources = sources
             configuration.echoCancellation = EchoCancellation(rawValue: settings.echo.rawValue) ?? .off
+            configuration.spoolAudio = settings.keepAudio
+            configuration.segmentSeconds = live ? 1 : 5
+            rawLines = []; liveLines = []; transcribers = [:]
+            if live {
+                try engine.verifySpeechModel()
+                for channel in sources {
+                    transcribers[channel] = try LiveTranscriber(channel: channel, engine: engine) { [weak self] line in
+                        Task { @MainActor in self?.appendLive(line) }
+                    }
+                }
+            }
+            currentSpool = spool
             let session = CaptureSession(spool: spool, configuration: configuration) { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             }
@@ -119,6 +146,9 @@ struct MeetingNotice: Identifiable, Equatable {
                 self.elapsed = Date().timeIntervalSince(startedAt)
             }
         } catch {
+            transcribers.values.forEach { $0.cancel() }
+            transcribers = [:]
+            currentSpool = nil
             try? keys.destroy(for: id)
             try? FileManager.default.removeItem(at: root.appendingPathComponent(id))
             meetings.removeAll { $0.id == id }
@@ -151,6 +181,7 @@ struct MeetingNotice: Identifiable, Equatable {
     private func handle(_ event: CaptureSession.Event) {
         switch event {
         case .segment(let segment):
+            transcribers[segment.channel]?.send(segment)
             guard var record = current else { return }
             if segment.channel == .microphone { record.microphoneSegments += 1 } else { record.systemSegments += 1 }
             current = record
@@ -202,7 +233,64 @@ struct MeetingNotice: Identifiable, Equatable {
             askWhetherToStop = false
             systemAudioPath = nil
             echoState = nil
-            if let finished, settings.autoNotes, engine.problem == nil { makeNotes(finished) }
+            if let finished, !transcribers.isEmpty {
+                finishLive(finished)
+            } else if let finished, settings.autoNotes, engine.problem == nil {
+                makeNotes(finished)
+            }
+        }
+    }
+
+    // MARK: Live transcript
+
+    private func appendLive(_ line: TimedText) {
+        rawLines.append(line)
+        liveLines = TranscriptAssembler.merge(rawLines).lines
+        saveLiveTranscript()
+    }
+
+    /// The transcript is sealed to disk after every new line, so a crash or power cut keeps it.
+    private func saveLiveTranscript() {
+        guard let spool = currentSpool else { return }
+        let text = TranscriptAssembler.render(liveLines)
+        sealQueue.async { try? spool.writeSealed("transcript", Data(text.utf8)) }
+        if var record = current, isRecording {
+            record.durationSeconds = Int(elapsed)
+            current = record
+            update(record)
+        }
+    }
+
+    /// After Stop: let the engines finish what they still hold, save the final transcript, then write notes.
+    private func finishLive(_ record: MeetingRecord) {
+        var working = record
+        working.status = .transcribing
+        update(working)
+        let pending = Array(transcribers.values)
+        transcribers = [:]
+        Task.detached(priority: .userInitiated) {
+            let clean = pending.map { $0.finish() }.allSatisfy { $0 }
+            await MainActor.run {
+                let merged = TranscriptAssembler.merge(self.rawLines)
+                self.liveLines = merged.lines
+                self.saveLiveTranscript()
+                self.sealQueue.sync {}
+                self.currentSpool = nil
+                working.echoesDropped = merged.echoesDropped
+                if !clean { working.problem = "Part of the transcript may be missing: the speech engine stopped early." }
+                if merged.lines.isEmpty {
+                    working.status = .failed
+                    working.problem = "Nothing was heard during this meeting."
+                    self.update(working)
+                } else if self.settings.autoNotes {
+                    working.status = .recorded
+                    self.update(working)
+                    self.makeNotes(working)
+                } else {
+                    working.status = .recorded
+                    self.update(working)
+                }
+            }
         }
     }
 
@@ -225,8 +313,15 @@ struct MeetingNotice: Identifiable, Equatable {
                 let key = try keys.load(for: record.id)
                 let spool = try AudioSpool(root: root, meetingID: record.id, key: key)
                 let channels = record.sources.compactMap(CaptureChannel.init(rawValue:))
-                let transcript = try MeetingProcessor.transcribe(spool: spool, channels: channels, engine: engine)
-                try spool.writeSealed("transcript", Data(transcript.text.utf8))
+                let transcript: (text: String, echoesDropped: Int)
+                if record.audioKept == false {
+                    // Transcript-only meeting: the live transcript is the source.
+                    guard let saved = try spool.readSealed("transcript"), !saved.isEmpty else { throw ProcessingError.nothingRecorded }
+                    transcript = (String(decoding: saved, as: UTF8.self), record.echoesDropped ?? 0)
+                } else {
+                    transcript = try MeetingProcessor.transcribe(spool: spool, channels: channels, engine: engine)
+                    try spool.writeSealed("transcript", Data(transcript.text.utf8))
+                }
                 await MainActor.run {
                     working.status = .makingNotes
                     working.echoesDropped = transcript.echoesDropped
@@ -290,7 +385,7 @@ struct MeetingNotice: Identifiable, Equatable {
             record.microphoneSegments = recovery.readable[.microphone]?.count ?? 0
             record.systemSegments = recovery.readable[.system]?.count ?? 0
             record.damagedSegments = recovery.unreadable.count
-            record.durationSeconds = Int((recovery.lastAudioEndMs ?? 0) / 1000)
+            if record.audioKept != false { record.durationSeconds = Int((recovery.lastAudioEndMs ?? 0) / 1000) }
             record.endedAt = record.startedAt.addingTimeInterval(TimeInterval(record.durationSeconds))
             record.status = .interrupted
             update(record)
