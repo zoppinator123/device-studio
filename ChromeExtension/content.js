@@ -14,6 +14,7 @@
   let observedRegion = null;
   let weEnabledCaptions = false;
   let captionAttempts = 0;
+  let captionsHandled = false;
   let lastMeeting = "";
   let lastParticipants = "";
   const seenSpeakers = new Set();
@@ -30,7 +31,7 @@
         const was = state.recording && state.speakers;
         state = { running: !!msg.running, recording: !!msg.recording, speakers: msg.speakers !== false };
         const now = state.recording && state.speakers;
-        if (now && !was) { captionAttempts = 0; lastMeeting = ""; lastParticipants = ""; }
+        if (now && !was) { captionAttempts = 0; captionsHandled = false; lastMeeting = ""; lastParticipants = ""; }
         if (!now && was) restoreCaptions();
         tick();
       }
@@ -69,11 +70,18 @@
       || document.querySelector(".a4cQT");
   }
 
-  function captionsButton() {
-    return document.querySelector('button[aria-label*="captions" i], button[jsname="r8qRAd"]');
+  // Meet's captions control comes in two shapes: one button labelled "Turn on/off captions", or (newer) a
+  // "Captions and translation" button that opens a menu holding that switch.
+  function captionsSwitch() {
+    return Array.from(document.querySelectorAll("[aria-label]"))
+      .find((el) => /^turn (on|off) (live )?captions/i.test(el.getAttribute("aria-label") || "")) || null;
   }
 
-  const isOn = (b) => b.getAttribute("aria-pressed") === "true" || /turn off/i.test(b.getAttribute("aria-label") || "");
+  function captionsOpener() {
+    return document.querySelector('button[aria-label^="Captions and translation" i], button[jsname="r8qRAd"]');
+  }
+
+  const switchIsOn = (el) => /^turn off/i.test(el.getAttribute("aria-label") || "");
 
   function lines(el) {
     return (el.innerText || el.textContent || "").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -127,10 +135,17 @@
     }
   }
 
+  // A tile's name can be read twice in a row ("Jack ZoppaJack Zoppa"); keep one copy.
+  function cleanName(text) {
+    const n = text.trim();
+    const half = n.length / 2;
+    return Number.isInteger(half) && half > 0 && n.slice(0, half) === n.slice(half) ? n.slice(0, half) : n;
+  }
+
   function participants() {
     const names = new Set(seenSpeakers);
     for (const el of document.querySelectorAll('[data-participant-id] [jsname="EydYod"], [data-participant-id] .zWGUib, [data-participant-id] .XEazBc')) {
-      const n = (el.textContent || "").trim();
+      const n = cleanName(el.textContent || "");
       if (n && n.length <= 60) names.add(n);
     }
     const me = selfName();
@@ -141,25 +156,56 @@
 
   // MARK: Captions on while recording (and back off afterwards, if this extension turned them on).
 
-  function ensureCaptions() {
-    if (captionRegion() || captionAttempts >= 5) return;
-    const button = captionsButton();
-    captionAttempts += 1;
-    if (button && !isOn(button)) {
-      button.click();
-      weEnabledCaptions = true;
-    } else if (!button) {
-      // Meet's own shortcut for captions.
-      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", keyCode: 67, bubbles: true }));
-      weEnabledCaptions = true;
-    }
+  // Meet's own shortcut for captions, for when no control can be found on the page.
+  function pressCaptionsShortcut() {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", code: "KeyC", keyCode: 67, bubbles: true }));
   }
 
+  // One step toward the wanted state: "done" (already there), "clicked", "opened" (the menu; its switch is
+  // pressed on the next step) or "none" (no control found).
+  function stepCaptions(wantOn) {
+    const toggle = captionsSwitch();
+    if (toggle) {
+      if (switchIsOn(toggle) === wantOn) return "done";
+      toggle.click();
+      return "clicked";
+    }
+    const opener = captionsOpener();
+    if (opener) { opener.click(); return "opened"; }
+    return "none";
+  }
+
+  // Leave Meet's captions menu closed if our own clicks left it open.
+  function closeMenu() {
+    const opener = captionsOpener();
+    if (captionsSwitch() && opener) opener.click();
+  }
+
+  function ensureCaptions() {
+    if (captionsHandled || captionAttempts >= 6) return;
+    if (captionRegion()) { captionsHandled = true; return; }   // already showing
+    captionAttempts += 1;
+    const result = stepCaptions(true);
+    if (result === "done") { captionsHandled = true; closeMenu(); }
+    else if (result === "clicked") { weEnabledCaptions = true; captionsHandled = true; setTimeout(closeMenu, 600); }
+    else if (result === "none") { pressCaptionsShortcut(); weEnabledCaptions = true; captionsHandled = true; }
+  }
+
+  let restoreTries = 0;
   function restoreCaptions() {
     if (!weEnabledCaptions) return;
-    weEnabledCaptions = false;
-    const button = captionsButton();
-    if (button && isOn(button)) button.click();
+    restoreTries = 6;
+    stepRestore();
+  }
+
+  function stepRestore() {
+    if (restoreTries <= 0) return;
+    restoreTries -= 1;
+    const result = stepCaptions(false);
+    if (result === "opened") { setTimeout(stepRestore, 600); return; }   // the switch is pressed on the next step
+    if (result === "none" && captionRegion()) pressCaptionsShortcut();
+    weEnabledCaptions = false; restoreTries = 0;
+    if (result === "clicked") setTimeout(closeMenu, 600); else if (result === "done") closeMenu();
   }
 
   function watchRegion() {

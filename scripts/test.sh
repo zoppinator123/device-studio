@@ -8,6 +8,7 @@ swiftc Sources/ControlCenter/Models.swift Sources/ControlCenter/SetupModels.swif
 clang -Wall -Wextra -I Sources/CDeviceSupport/include Tests/HIDButtonTests.c -framework IOKit -framework CoreFoundation -o "$CHECK_DIR/hid-checks"
 "$CHECK_DIR/hid-checks"
 for f in ChromeExtension/*.js; do node --check "$f"; done
+node Tests/MeetExtensionTests.js
 python3 -c 'import json; json.load(open("ChromeExtension/manifest.json"))'
 swift test 2>&1 | grep -E "Executed [0-9]+ tests" | tail -1
 if [[ "${1:-}" == "--hardware" ]]; then
