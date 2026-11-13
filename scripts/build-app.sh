@@ -18,11 +18,21 @@ cp "$BIN_DIR/DeviceStudio" "$APP/Contents/MacOS/DeviceStudio"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
 swift scripts/make-icon.swift "$PWD/dist/AppIcon.iconset"
 iconutil -c icns "$PWD/dist/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
-SIGN_IDENTITY="${DEVICE_STUDIO_SIGN_IDENTITY:--}"
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
-    codesign --force --sign - --identifier com.jackzoppa.devicestudio "$APP"
-else
+# Signing, in order of preference:
+#  1. DEVICE_STUDIO_SIGN_IDENTITY (a Developer ID for releases; see DISTRIBUTING.md).
+#  2. An "Apple Development" identity in the keychain (a free Personal Team works). macOS keys permission
+#     grants (microphone, system audio, Accessibility) to the signature, so a stable identity keeps them
+#     across rebuilds; an ad-hoc signature loses them every time.
+#  3. Ad-hoc, if neither exists.
+SIGN_IDENTITY="${DEVICE_STUDIO_SIGN_IDENTITY:-}"
+if [[ -n "$SIGN_IDENTITY" ]]; then
     codesign --force --options runtime --timestamp --entitlements scripts/entitlements.plist --sign "$SIGN_IDENTITY" "$APP"
+elif DEV_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $2; exit}') && [[ -n "$DEV_IDENTITY" ]]; then
+    codesign --force --options runtime --timestamp=none --entitlements scripts/entitlements.plist --sign "$DEV_IDENTITY" "$APP"
+    echo "Signed with Apple Development identity $DEV_IDENTITY"
+else
+    codesign --force --sign - --identifier com.jackzoppa.devicestudio "$APP"
+    echo "Signed ad-hoc: macOS permissions will need to be granted again after each rebuild"
 fi
 codesign --verify --deep --strict "$APP"
 if [[ "$INSTALL_APP" == true ]]; then

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case overview, camera, mouse, dictation, setup
+    case overview, camera, mouse, dictation, meetings, setup
 
     var id: String { rawValue }
 
@@ -11,6 +11,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .camera: return "Camera"
         case .mouse: return "Mouse"
         case .dictation: return "Dictation"
+        case .meetings: return "Meetings"
         case .setup: return "Setup Guide"
         }
     }
@@ -21,6 +22,7 @@ enum Page: String, CaseIterable, Identifiable {
         case .camera: return "web.camera"
         case .mouse: return "computermouse"
         case .dictation: return "mic"
+        case .meetings: return "waveform"
         case .setup: return "checklist"
         }
     }
@@ -31,17 +33,21 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            Sidebar(page: $model.selectedPage, mouse: model.mouse)
+            Sidebar(page: $model.selectedPage, mouse: model.mouse, recorder: model.meetings)
         } detail: {
             switch model.selectedPage {
             case .overview: OverviewPage(mouse: model.mouse, camera: model.camera)
             case .camera: CameraPage(camera: model.camera)
             case .mouse: MousePage(mouse: model.mouse)
             case .dictation: DictationPage(mouse: model.mouse)
+            case .meetings: MeetingsPage(recorder: model.meetings)
             case .setup: SetupWizard(mouse: model.mouse, camera: model.camera)
             }
         }
         .frame(minWidth: 780, minHeight: 560)
+        .toolbar {
+            ToolbarItem(placement: .automatic) { RecordingBadge(recorder: model.meetings) }
+        }
         .alert("Settings Need Attention", isPresented: errorIsPresented) {
             Button("OK") { model.error = nil }
         } message: {
@@ -57,6 +63,7 @@ struct ContentView: View {
 private struct Sidebar: View {
     @Binding var page: Page
     @ObservedObject var mouse: MouseController
+    @ObservedObject var recorder: MeetingRecorder
 
     private static let devicePages: [Page] = [.overview, .camera, .mouse, .dictation]
 
@@ -68,6 +75,11 @@ private struct Sidebar: View {
                         .badge(item == .overview && !mouse.trusted ? 1 : 0)
                         .tag(item)
                 }
+            }
+            Section("Meetings") {
+                Label(Page.meetings.title, systemImage: recorder.isRecording ? "record.circle.fill" : Page.meetings.symbol)
+                    .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
+                    .tag(Page.meetings)
             }
             Section("Help") {
                 Label(Page.setup.title, systemImage: Page.setup.symbol)

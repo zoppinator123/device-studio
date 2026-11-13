@@ -18,12 +18,13 @@
 - **Camera image controls.** Exposure, white balance, focus, zoom, and the rest of the camera's hardware settings, written straight to the camera over USB. Save looks as presets.
 - **Mouse shortcuts and scrolling.** Map the extra buttons to keyboard shortcuts, navigation, or camera presets. Add hold-and-drag gestures, change scroll speed and direction, and keep separate profiles per app.
 - **Hold to dictate.** Hold the MX Master thumb button to hold [Granola](https://www.granola.ai)'s voice-typing key; release to stop.
+- **Record meetings.** Record your microphone and, for calls, what your Mac plays, as two separate channels. Start and stop from the Meetings page, the menu bar, or a mouse button. Recordings are encrypted on your Mac and never uploaded. Turning them into transcripts and notes is not part of this version yet.
 
 Each feature is optional. A setup guide walks through the ones you pick.
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 14.2 or later (meeting recording uses Core Audio process taps, added in 14.2)
 - To build from source: Apple's command-line developer tools (`xcode-select --install`)
 
 | Hardware | Status |
@@ -72,8 +73,10 @@ Closing the window leaves Device Studio running in the menu bar. Quit from its m
 | Accessibility | Button mappings, hold to dictate | Reads mouse events and presses keys for you. Called "Device Control and Data Access" on macOS 27. |
 | Camera | Live preview | Image controls work without it. |
 | Input Monitoring | Talking to the mouse | Only if macOS blocks the connection. Reopen the app after granting it. |
+| Microphone | Meeting recording | Asked the first time you record, after an explanation of what is recorded. |
+| System Audio Recording Only | Recording the other people on a call | Asked the first time a call is recorded. Audio only: no screen or video. If it is off, recordings carry your microphone only and the Meetings page says so. |
 
-macOS ties a permission to one specific copy of an app. If a switch is on in System Settings but the app still reports it missing, remove the Device Studio entry with **−**, add `~/Applications/Device Studio.app` again with **+**, and reopen the app. This is most common after rebuilding from source, because a locally signed build gets a new identity each time.
+macOS ties a permission to one specific copy of an app. If a switch is on in System Settings but the app still reports it missing, remove the Device Studio entry with **−**, add `~/Applications/Device Studio.app` again with **+**, and reopen the app. This is most common after rebuilding from source with an ad-hoc signature, which gets a new identity each time. `build-app.sh` signs with an Apple Development identity when your keychain has one (a free Apple account's Personal Team is enough), which keeps permissions across rebuilds.
 
 ## Using it
 
@@ -126,6 +129,7 @@ This works independently of button mappings. Don't assign the same thumb button 
 - **If the app crashes or the mouse is unplugged mid-use,** the thumb button may keep its diverted behavior. Switch the mouse off and on to restore it.
 - **Input.** If macOS disables the app's event tap, mappings turn off rather than retrying, so your mouse always falls back to normal behavior.
 - **Your data.** Settings are one JSON file at `~/Library/Application Support/DeviceStudio/settings.json`. A file the app can't read is left untouched, and saving is disabled for that launch, so nothing is overwritten. No keystrokes or pointer positions are recorded anywhere.
+- **Meeting audio.** Recorded only while the menu bar shows a red dot and the time. Microphone and system audio are kept as separate channels, sealed in 5-second encrypted segments (AES-256-GCM, a new key for each meeting stored in your Keychain as this-device-only) under `~/Library/Application Support/DeviceStudio/Meetings`, which is excluded from backups. Nothing is uploaded. Deleting a recording destroys its key first, so the audio can't be opened again. If the app or the Mac stops mid-recording, everything up to about the last 10 seconds is kept and the recording is marked interrupted.
 
 ## Troubleshooting
 

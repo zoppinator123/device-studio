@@ -22,8 +22,24 @@ import Darwin
         .defaultSize(width: 920, height: 720)
         .commands { CommandGroup(replacing: .newItem) {} }
 
-        MenuBarExtra("Device Studio", systemImage: "slider.horizontal.3") {
-            MenuContent(model: model, mouse: model.mouse)
+        MenuBarExtra {
+            MenuContent(model: model, mouse: model.mouse, recorder: model.meetings)
+        } label: {
+            MenuBarLabel(recorder: model.meetings)
+        }
+    }
+}
+
+/// The menu bar icon. While a meeting is recording it becomes a record symbol with the elapsed time, and it
+/// cannot be hidden from inside the app (PLAN 2.2).
+struct MenuBarLabel: View {
+    @ObservedObject var recorder: MeetingRecorder
+    var body: some View {
+        if recorder.isRecording {
+            Image(systemName: "record.circle.fill")
+            Text(MeetingRecorder.duration(Int(recorder.elapsed)))
+        } else {
+            Image(systemName: "slider.horizontal.3")
         }
     }
 }
@@ -31,9 +47,15 @@ import Darwin
 struct MenuContent: View {
     @ObservedObject var model: AppModel
     @ObservedObject var mouse: MouseController
+    @ObservedObject var recorder: MeetingRecorder
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button(recorder.isRecording ? "Stop Recording" : "Record Meeting") {
+            if !recorder.isRecording && !model.settings.meetings.explainerAccepted { openWindow(id: "main") }
+            model.toggleRecording()
+        }
+        Divider()
         Button("Open Device Studio") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)

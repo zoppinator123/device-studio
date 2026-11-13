@@ -5,6 +5,7 @@ import AVFoundation
 @MainActor final class AppModel: ObservableObject {
     let camera = CameraController()
     let mouse: MouseController
+    let meetings: MeetingRecorder
     let store: SettingsStore
     @Published var settings = Settings()
     @Published var error: String?
@@ -18,6 +19,7 @@ import AVFoundation
         let previewURL = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("DeviceStudio-setup-preview-\(UUID().uuidString)/settings.json") : nil
         store = SettingsStore(url: previewURL)
         mouse = MouseController(diagnosticsURL: store.url.deletingLastPathComponent().appendingPathComponent("mouse-status.json"))
+        meetings = MeetingRecorder(root: store.url.deletingLastPathComponent().appendingPathComponent("Meetings", isDirectory: true))
         do { settings = try store.load() }
         catch { self.error = "Could not read saved settings. Your existing file has been preserved at \(store.url.path). \(error.localizedDescription)"; canSave = false }
         if canSave { do { try store.save(settings) } catch { self.error = "Could not create settings file: \(error.localizedDescription)" } }
@@ -34,9 +36,12 @@ import AVFoundation
         // Saved button mappings should work after every launch without a trip to the menu bar.
         if !preview, settings.profiles.contains(where: { $0.rules.contains(where: \.captures) }) { mouse.enable() }
         mouse.onAction = { [weak self] action in
-            guard let self, let preset = self.settings.cameraPresets.first(where: { $0.id == action.presetID }) else { return }
+            guard let self else { return }
+            if action.kind == .toggleRecording { self.toggleRecording(); return }
+            guard let preset = self.settings.cameraPresets.first(where: { $0.id == action.presetID }) else { return }
             self.camera.apply(preset)
         }
+        meetings.recoverInterruptedRecordings()
         subscription = $settings.dropFirst().debounce(for: .milliseconds(300), scheduler: DispatchQueue.main).sink { [weak self] settings in
             guard let self else { return }
             self.mouse.profiles = settings.profiles
@@ -84,7 +89,20 @@ import AVFoundation
         profile.id = UUID(); profile.bundleID = bundleID; profile.name = url.deletingPathExtension().lastPathComponent
         settings.profiles.append(profile); selectedProfile = profile.id
     }
+    /// Start or stop from the menu bar or a mouse button. The first recording always goes through the
+    /// explanation on the Meetings page, never straight to the system permission prompts.
+    func toggleRecording() {
+        if meetings.isRecording { meetings.stop(); return }
+        guard settings.meetings.explainerAccepted else {
+            selectedPage = .meetings
+            meetings.showExplainer = true
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        meetings.start(settings: settings.meetings)
+    }
     func shutdown() {
+        meetings.stop()
         mouse.shutdown(); camera.shutdown()
         if canSave { do { try store.save(settings) } catch { NSLog("Settings save failed: %@", error.localizedDescription) } }
     }

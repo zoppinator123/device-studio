@@ -6,11 +6,13 @@
 <key>CFBundleDisplayName</key><string>Device Studio</string>
 <key>CFBundleExecutable</key><string>DeviceStudio</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>1.2</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSMinimumSystemVersion</key><string>14.2</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSCameraUsageDescription</key><string>Device Studio shows a local live preview while you adjust your camera. Nothing is recorded or uploaded.</string>
+<key>NSMicrophoneUsageDescription</key><string>Device Studio records your microphone only while you are recording a meeting. The audio stays encrypted on this Mac and is never uploaded.</string>
+<key>NSAudioCaptureUsageDescription</key><string>Device Studio records what your Mac plays, such as the other people on a call, only while you are recording a meeting. The audio stays encrypted on this Mac and is never uploaded.</string>
 <key>NSInputMonitoringUsageDescription</key><string>Read Logitech hardware responses to show sensor DPI and battery status.</string>
 </dict></plist>

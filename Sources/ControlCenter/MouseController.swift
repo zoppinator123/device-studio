@@ -191,7 +191,7 @@ import IOKit.hid
         var shortcut = action.shortcut
         switch action.kind {
         case .passthrough: return
-        case .cameraPreset: onAction?(action); return
+        case .cameraPreset, .toggleRecording: onAction?(action); return
         case .back: shortcut = Shortcut(keyCode: 33, modifiers: CGEventFlags.maskCommand.rawValue, label: "⌘[")
         case .forward: shortcut = Shortcut(keyCode: 30, modifiers: CGEventFlags.maskCommand.rawValue, label: "⌘]")
         case .missionControl: shortcut = Shortcut(keyCode: 126, modifiers: CGEventFlags.maskControl.rawValue, label: "⌃↑")

@@ -8,7 +8,7 @@ struct Shortcut: Codable, Equatable {
 }
 
 enum ActionKind: String, Codable, CaseIterable, Identifiable {
-    case passthrough, shortcut, back, forward, missionControl, desktop, cameraPreset
+    case passthrough, shortcut, back, forward, missionControl, desktop, cameraPreset, toggleRecording
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -19,6 +19,7 @@ enum ActionKind: String, Codable, CaseIterable, Identifiable {
         case .missionControl: return "Mission Control (⌃↑)"
         case .desktop: return "Show desktop (F11)"
         case .cameraPreset: return "Apply camera preset"
+        case .toggleRecording: return "Start or stop meeting recording"
         }
     }
 }
@@ -73,8 +74,9 @@ struct Settings: Codable, Equatable {
     var cameraPresets: [CameraPreset] = []
     var granolaThumb = GranolaThumbSettings()
     var setup = SetupProgress()
+    var meetings = MeetingSettings()
     init() {}
-    private enum CodingKeys: String, CodingKey { case schemaVersion, profiles, cameraPresets, granolaThumb, setup }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, profiles, cameraPresets, granolaThumb, setup, meetings }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
@@ -82,6 +84,42 @@ struct Settings: Codable, Equatable {
         cameraPresets = try values.decode([CameraPreset].self, forKey: .cameraPresets)
         granolaThumb = try values.decodeIfPresent(GranolaThumbSettings.self, forKey: .granolaThumb) ?? GranolaThumbSettings()
         setup = try values.decodeIfPresent(SetupProgress.self, forKey: .setup) ?? SetupProgress()
+        meetings = try values.decodeIfPresent(MeetingSettings.self, forKey: .meetings) ?? MeetingSettings()
+    }
+}
+
+/// Meeting recording preferences. Recordings themselves are not settings; they live in their own encrypted
+/// folder (see MeetingRecorder).
+struct MeetingSettings: Codable, Equatable {
+    var mode = MeetingMode.call
+    var echo = MeetingEchoMode.off
+    /// The one-time explanation of what is recorded has been read and accepted.
+    var explainerAccepted = false
+    init() {}
+    private enum CodingKeys: String, CodingKey { case mode, echo, explainerAccepted }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        mode = (try? values.decode(MeetingMode.self, forKey: .mode)) ?? .call
+        echo = (try? values.decode(MeetingEchoMode.self, forKey: .echo)) ?? .off
+        explainerAccepted = (try? values.decode(Bool.self, forKey: .explainerAccepted)) ?? false
+    }
+}
+
+enum MeetingMode: String, Codable, CaseIterable, Identifiable {
+    case call, inPerson
+    var id: String { rawValue }
+    var title: String { self == .call ? "Call: my microphone and what my Mac plays" : "In person: microphone only" }
+}
+
+enum MeetingEchoMode: String, Codable, CaseIterable, Identifiable {
+    case off, whenOnSpeakers, always
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .whenOnSpeakers: return "When not using headphones"
+        case .always: return "Always"
+        }
     }
 }
 
