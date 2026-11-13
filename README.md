@@ -131,7 +131,13 @@ Device Studio does not bundle speech or language models. Point the Meetings page
 
 Both run as child processes with network access denied, read audio and text through a pipe, and write nothing to disk; Device Studio saves the transcript and notes encrypted with the meeting's key. During a meeting, one speech engine per channel runs in streaming mode: audio goes to it a second at a time and each line appears in the Live Transcript window about a second after the speaker pauses. The transcript is saved after every line, so a crash keeps it. Audio is not written to disk unless **Keep audio** is on. Your microphone is labelled "Me" and system audio "Others"; when your microphone picks up the call through speakers, the repeated lines are dropped. Without an engine folder, recording still works and notes can be made later.
 
-`DeviceStudio --self-test-live` and `--self-test-notes` check the live transcript and the notes with synthesized speech, without using the microphone.
+### Names on Google Meet calls
+
+The `ChromeExtension` folder is a small Chrome extension that tells Device Studio who is speaking on a Google Meet call, so lines show the person's name instead of "Others". While Device Studio is recording, the extension turns on Meet's captions, reads each caption's speaker and words on `meet.google.com` only, and passes them through Chrome native messaging to the running app over a socket only your user account can open. Device Studio gives each system-audio line the name whose captions match its words in time. The captions stay in memory during the meeting and are then sealed with the meeting's key, so notes made again later keep the names; attendees are passed to the notes engine too. The extension turns the captions back off when recording stops if it turned them on.
+
+To set it up, click **Set Up Chrome…** on the Meetings page (it registers the app with Chrome and opens the extension folder), then in Chrome open `chrome://extensions`, turn on Developer mode, click **Load unpacked**, and choose that folder. The extension's ID is fixed, and the app only answers that ID.
+
+`DeviceStudio --self-test-bridge` checks the Chrome link without Chrome, and `--self-test-live` and `--self-test-notes` check the live transcript and the notes with synthesized speech, without using the microphone.
 
 ## What it will and won't touch
 

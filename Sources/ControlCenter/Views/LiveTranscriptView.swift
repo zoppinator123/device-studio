@@ -1,7 +1,8 @@
 import CaptureKit
 import SwiftUI
 
-/// The transcript as it is spoken: "Me" for your microphone, "Others" for the call. New lines appear a
+/// The transcript as it is spoken: "Me" for your microphone, and for the call each person's name when
+/// Google Meet supplies it ("Them" otherwise). New lines appear a
 /// moment after each pause, and the view follows the newest line.
 struct LiveTranscriptView: View {
     @ObservedObject var recorder: MeetingRecorder
@@ -37,10 +38,13 @@ struct LiveTranscriptView: View {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Text(stamp(line.startMs)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                                     .frame(width: 44, alignment: .trailing)
-                                Text(line.channel == .microphone ? "Me" : "Them")
+                                Text(name(line))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(line.channel == .microphone ? Color.accentColor : Color.orange)
-                                    .frame(width: 40, alignment: .leading)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(width: named ? 96 : 40, alignment: .leading)
+                                    .help(name(line))
                                 Text(line.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                             }
                             .id(index)
@@ -57,6 +61,13 @@ struct LiveTranscriptView: View {
         }
         .padding(16)
         .frame(minWidth: 360, minHeight: 300)
+    }
+
+    private var named: Bool { recorder.liveLines.contains { $0.speaker != nil } }
+
+    /// "Me", the speaker's name from Google Meet, or "Them" when nobody was named.
+    private func name(_ line: TimedText) -> String {
+        line.channel == .microphone ? "Me" : (TimedText.cleanName(line.speaker) ?? "Them")
     }
 
     private func stamp(_ ms: Int64) -> String {

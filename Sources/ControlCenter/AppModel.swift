@@ -14,6 +14,7 @@ import AVFoundation
     @Published var granolaInstalled = false
     private var subscription: AnyCancellable?
     private var canSave = true
+    private var bridge: MeetBridgeServer?
     init() {
         let preview = CommandLine.arguments.contains("--setup-preview")
         let previewURL = preview ? FileManager.default.temporaryDirectory.appendingPathComponent("DeviceStudio-setup-preview-\(UUID().uuidString)/settings.json") : nil
@@ -43,10 +44,15 @@ import AVFoundation
         }
         meetings.settings = settings.meetings
         meetings.recoverInterruptedRecordings()
+        if !preview { startMeetBridge() }
         subscription = $settings.dropFirst().debounce(for: .milliseconds(300), scheduler: DispatchQueue.main).sink { [weak self] settings in
             guard let self else { return }
             self.mouse.profiles = settings.profiles
             self.mouse.configureGranola(settings.granolaThumb)
+            if self.meetings.settings.meetSpeakers != settings.meetings.meetSpeakers {
+                self.meetings.settings = settings.meetings
+                self.sendMeetState()
+            }
             self.meetings.settings = settings.meetings
             guard self.canSave else { return }
             do { try self.store.save(settings) } catch { self.error = "Could not save settings: \(error.localizedDescription)" }
@@ -104,7 +110,24 @@ import AVFoundation
         meetings.settings = settings.meetings
         meetings.start(settings: settings.meetings)
     }
+    /// The Chrome extension's link to this app (see MeetBridge). Chrome finds the app through a small
+    /// manifest file, which is refreshed at every launch so it always points at this copy of the app.
+    private func startMeetBridge() {
+        let server = MeetBridgeServer(onMessage: { [weak self] message in self?.meetings.meetMessage(message) },
+                                      onClientsChanged: { [weak self] count in self?.meetings.meetTabsChanged(count) })
+        do { try server.start() } catch { NSLog("Meet bridge unavailable: %@", error.localizedDescription); return }
+        bridge = server
+        meetings.onRecordingChange = { [weak self] _ in self?.sendMeetState() }
+        sendMeetState()
+        if settings.meetings.meetSpeakers, MeetBridge.chromeInstalled, !MeetBridge.isInstalled { _ = try? MeetBridge.install() }
+    }
+
+    func sendMeetState() {
+        bridge?.broadcast(["type": "state", "recording": meetings.isRecording, "speakers": settings.meetings.meetSpeakers])
+    }
+
     func shutdown() {
+        bridge?.stop()
         meetings.stop()
         mouse.shutdown(); camera.shutdown()
         if canSave { do { try store.save(settings) } catch { NSLog("Settings save failed: %@", error.localizedDescription) } }

@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Device Studio Speakers",
+  "version": "1.0.0",
+  "description": "Tells Device Studio on this Mac who is speaking on a Google Meet call, so your local transcript shows names.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs7kqgLe/nZDafG8dSV72zN2SF238aZWgNhFWLHq5VQX6sbn6PvIiygY8HQ98lgLbp3yeVA7XE5g6BdmWCSI2TL/sBsfFLtsJ96avhjY27JiNT9goKzI0WRB3eQddHf8yaRAqnWElHBX95OKm10gwtQiqeokSZaFDoMJsregk0KLfBGYtZYE7oOWnV1bTmNceIED80zdyw5X+J3K1hsvl5w1WzhzTVcQZM0ZFn6hF/NFUaaHY1az4na7il9zZYgt2OcViAbtezE909e3IjUTWr5oQP1/Shq1yKCDktgeCnC9s7R7xwwcl7al+Z0Q3HFYcfDuWLbY6/N3yV8OtPWXuywIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Device Studio Speakers", "default_popup": "popup.html" }
+}

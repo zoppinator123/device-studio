@@ -6,8 +6,27 @@ public struct TimedText: Equatable, Sendable {
     public var startMs: Int64
     public var endMs: Int64
     public var text: String
-    public init(channel: CaptureChannel, startMs: Int64, endMs: Int64, text: String) {
-        self.channel = channel; self.startMs = startMs; self.endMs = endMs; self.text = text
+    /// Who said it, when known (from the meeting app's captions). Nil means "Me" or "Others" by channel.
+    public var speaker: String?
+    public init(channel: CaptureChannel, startMs: Int64, endMs: Int64, text: String, speaker: String? = nil) {
+        self.channel = channel; self.startMs = startMs; self.endMs = endMs; self.text = text; self.speaker = speaker
+    }
+
+    /// The label shown and written to the transcript.
+    public var label: String {
+        if channel == .microphone { return "Me" }
+        return TimedText.cleanName(speaker) ?? "Others"
+    }
+
+    /// A name safe for the "[m:ss] Name: text" format. Labels the notes engine reserves are refused.
+    public static func cleanName(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let name = raw.replacingOccurrences(of: ":", with: " ")
+            .components(separatedBy: .newlines).joined(separator: " ")
+            .split(separator: " ").joined(separator: " ")
+        guard !name.isEmpty, name.count <= 60,
+              !["me", "microphone", "others", "system audio", "you"].contains(name.lowercased()) else { return nil }
+        return name
     }
 }
 
@@ -47,13 +66,13 @@ public enum TranscriptAssembler {
         return (sorted, dropped)
     }
 
-    /// The transcript format the notes engine reads: "[m:ss] Me: ..." and "[m:ss] Others: ...".
+    /// The transcript format the notes engine reads: "[m:ss] Me: ...", "[m:ss] Others: ..." or "[m:ss] Name: ...".
     public static func render(_ lines: [TimedText]) -> String {
         lines.map { line in
             let total = max(0, line.startMs / 1000)
             let stamp = total >= 3600 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
                                       : String(format: "%d:%02d", total / 60, total % 60)
-            return "[\(stamp)] \(line.channel == .microphone ? "Me" : "Others"): \(line.text)"
+            return "[\(stamp)] \(line.label): \(line.text)"
         }.joined(separator: "\n") + (lines.isEmpty ? "" : "\n")
     }
 }

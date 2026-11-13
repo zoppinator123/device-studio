@@ -62,6 +62,8 @@ struct MeetingsPage: View {
                 SectionFooter("Your words are transcribed live, on this Mac, as you speak; only the transcript is saved unless you choose to keep audio. Transcription (Parakeet) and notes (a local language model) run from a separate engine folder with network access blocked, and the transcript and notes are saved encrypted with the meeting’s key.")
             }
 
+            MeetSpeakersSection(recorder: recorder)
+
             Section {
                 Picker("Echo cancellation", selection: $model.settings.meetings.echo) {
                     ForEach(MeetingEchoMode.allCases) { Text($0.title).tag($0) }
@@ -174,6 +176,66 @@ struct MeetingsPage: View {
         case .recording, .recorded, .ready, .transcribing, .makingNotes: return .good
         case .interrupted, .failed: return .attention
         case .unreadable: return .inactive
+        }
+    }
+}
+
+/// Names for the people on Google Meet calls, through the Device Studio Chrome extension.
+private struct MeetSpeakersSection: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var recorder: MeetingRecorder
+    @State private var installed = MeetBridge.isInstalled
+    @State private var problem: String?
+
+    var body: some View {
+        Section {
+            Toggle("Name the people on Google Meet calls", isOn: $model.settings.meetings.meetSpeakers)
+            if model.settings.meetings.meetSpeakers {
+                HStack(alignment: .firstTextBaseline) {
+                    StatusLabel(text: status, level: level)
+                    Spacer(minLength: 12)
+                    Button(installed ? "Show Extension Folder" : "Set Up Chrome…", action: setUp)
+                }
+                if !recorder.meetNames.isEmpty {
+                    DetailText("On this call: " + recorder.meetNames.joined(separator: ", "))
+                }
+                if let problem { DetailText(problem) }
+                if !installed || recorder.meetTabs == 0 {
+                    NumberedStep(1, "Click Set Up Chrome. The extension folder opens in Finder.")
+                    NumberedStep(2, "In Chrome, open chrome://extensions, turn on Developer mode, click Load unpacked and choose that folder.")
+                    NumberedStep(3, "Join a Meet call and start recording. Meet’s captions turn on, and each line gets the speaker’s name.")
+                }
+            }
+        } header: {
+            Text("Google Meet")
+        } footer: {
+            SectionFooter("While you record, the Device Studio extension reads Meet’s captions in Chrome (only on meet.google.com) and passes the speaker names to this app on this Mac. Captions are used to label lines and are kept, encrypted, only with the meeting. Nothing joins the call and nothing is uploaded.")
+        }
+        .onAppear { installed = MeetBridge.isInstalled }
+    }
+
+    private var status: String {
+        if !MeetBridge.chromeInstalled { return "Google Chrome isn’t set up on this Mac." }
+        if !installed { return "Not set up yet." }
+        if recorder.meetTabs > 0 { return "Connected to \(recorder.meetTabs) Google Meet tab\(recorder.meetTabs == 1 ? "" : "s")." }
+        return "Ready. Open a Meet call in Chrome to connect."
+    }
+
+    private var level: StatusLevel {
+        recorder.meetTabs > 0 ? .good : installed ? .inactive : .attention
+    }
+
+    private func setUp() {
+        do {
+            guard try MeetBridge.install() else {
+                problem = "Open Google Chrome once, then try again."
+                return
+            }
+            problem = nil
+            installed = MeetBridge.isInstalled
+            NSWorkspace.shared.activateFileViewerSelecting([MeetBridge.extensionFolder])
+        } catch {
+            problem = "Could not set up Chrome: \(error.localizedDescription)"
         }
     }
 }
